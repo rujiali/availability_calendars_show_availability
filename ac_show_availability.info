@@ -1,0 +1,8 @@
+name = Availability Calendars Show Availability
+description = Show all resource availability states by date
+dependencies[] = availability_calendar
+dependencies[] = date
+files[] = ac_show_availability.module
+files[] = ac_show_availability.admin.inc
+core = 7.x
+package = Fields

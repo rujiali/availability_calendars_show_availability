@@ -1,0 +1,30 @@
+.slide table {
+    text-align: center;
+    width: 100%;
+}
+
+.slide td {
+    border: 1px dotted #b5b5b5;
+}
+
+.slide th {
+    text-align: center;
+    background-color: #9E9E9E;
+}
+
+.slide a {
+    color: black;
+    display: block;
+    width: 100%;
+}
+
+.slide a:hover {
+    background-color: #938FFF;
+}
+
+.bx-prev {
+}
+
+.bx-next {
+    float: right;
+}

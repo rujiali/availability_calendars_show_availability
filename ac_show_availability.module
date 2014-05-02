@@ -1,0 +1,259 @@
+<?php
+/**
+ * @file
+ * Originally developed for Datacom System ACT
+ * - Provide a calendar with all resources in it based on a date
+ * - Showing resource availability in calendar
+ *
+ * Extends the Availability Calendars Module.
+ *
+ */
+
+/**
+ * Implements hook_menu()
+ */
+function ac_show_availability_menu() {
+  $items = array();
+
+  $items['resource_availability'] = array(
+    'title' => t('Resource Availability'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('_ac_show_availability_form'),
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['admin/config/content/resource-availability'] = array(
+    'title' => t('Resource Availability Configuration'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('_ac_show_availability_admin_settings'),
+    'access arguments' => array('administer availability calendar'),
+    'file' => 'ac_show_availability.admin.inc',
+    'type' => MENU_NORMAL_ITEM,
+  );
+
+  $items['acsa/autocomplete'] = array(
+    'title' => 'Autocomplete availability',
+    'page callback' => '_acsa_autocomplete',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Menu callback for ac_show_availability_menu
+ */
+function _ac_show_availability_form($form, &$form_state) {
+  $form['availability'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Resource Availability'),
+    '#weight' => 5,
+    '#collapsible' => TRUE,
+    '#collapsed' => FALSE,
+    '#prefix' => '<div id = "acsa_result">',
+    '#suffix' => '</div>',
+  );
+
+  $form['availability']['acsa_start_date'] = array(
+    '#type' => 'date_popup',
+    '#title' => t('Start Date'),
+    '#date_format' => 'd-m-Y',
+    '#date_year_range' => '-100:+0',
+    '#default_value' => '',
+    '#description' => t('Input the start date'),
+    '#required' => TRUE,
+  );
+
+  $form['availability']['acsa_end_date'] = array(
+    '#type' => 'date_popup',
+    '#title' => t('End Date'),
+    '#date_format' => 'd-m-Y',
+    '#date_year_range' => '-100:+0',
+    '#default_value' => '',
+    '#description' => t('Input the end date'),
+    '#required' => TRUE,
+  );
+
+  $filters = variable_get('acsa_filter_fields');
+  foreach($filters as $filter) {
+    $field = field_info_field($filter);
+    $form['availability']['acsa_' . $filter] = array(
+      '#type' => 'textfield',
+      '#title' => t(':title', array(':title' => strtoupper((str_replace('field_', '', $filter))))),
+      '#size' => 30,
+      '#maxlength' => 60,
+      '#default_value' => '',
+    );
+    // check if filter by taxonomy
+    if ($field['type'] == 'taxonomy_term_reference') {
+      $form['availability']['acsa_' . $filter]['#autocomplete_path'] = 'taxonomy/autocomplete/' . $filter;
+    }
+    // check if filter by textfield
+    if ($field['type'] == 'text') {
+      $form['availability']['acsa_' . $filter]['#autocomplete_path'] = 'acsa/autocomplete/' . $filter;
+    }
+  }
+
+  $form['availability']['acsa_submit'] = array(
+    '#type' => 'button',
+    '#value' => t('Search'),
+    '#ajax' => array(
+      'callback' => '_ac_show_availability_ajax_submit',
+      'wrapper' => 'acsa_result',
+    ),
+  );
+
+  $form['availability']['result'] = array(
+    '#markup' => '',
+  );
+
+  /**
+   * pass slider settings to js
+   */
+  $slider_settings = array(
+    'acsa_slidewidth' => variable_get('acsa_slidewidth'),
+    'acsa_minslides' => variable_get('acsa_minslides'),
+    'acsa_maxslides' => variable_get('acsa_maxslides'),
+    'acsa_slidemargin' => variable_get('acsa_slidemargin'),
+  );
+
+  $form['#attached']['css'][] = drupal_get_path('module', 'ac_show_availability') . '/css/ac_show_availability.css';
+  $form['#attached']['js'][] = drupal_get_path('module', 'ac_show_availability') . '/js/ac_show_availability.js';
+  $form['#attached']['js'][] = array(
+    'data' => array('acsa' => $slider_settings),
+    'type' => 'setting'
+  );
+
+  $form['#attached']['js'][] = drupal_get_path('module', 'ac_show_availability') . '/js/bxslider/jquery.bxslider.min.js';
+
+  return $form;
+}
+
+/**
+ * Ajax form callback
+ */
+function _ac_show_availability_ajax_submit($form, &$form_state) {
+
+  $date = $form_state['values']['acsa_start_date'];
+  $enddate = $form_state['values']['acsa_end_date'];
+  if (!$date || !$enddate) {
+    return $form['availability'];
+  }
+
+  // find enabled filters
+  $filters = variable_get('acsa_filter_fields');
+  $filter_info = array();
+  foreach($filters as $filter) {
+    $field = field_info_field($filter);
+    $filter_value = $form_state['values']['acsa_' . $filter];
+
+    // check if filter field is taxonomy term
+    if ($field['type'] == 'taxonomy_term_reference') {
+      $vocab_name = $field['settings']['allowed_values'][0]['vocabulary'];
+      $vid = taxonomy_vocabulary_machine_name_load($vocab_name)->vid;
+      $term_query = new EntityFieldQuery;
+      $result = $term_query
+        ->entityCondition('entity_type', 'taxonomy_term')
+        ->propertyCondition('name', $filter_value)
+        ->propertyCondition('vid', $vid)
+        ->execute();
+      if (isset($result['taxonomy_term'])) {
+        $term_tids = array_keys($result['taxonomy_term']);
+        $filter_value = $term_tids[0];
+      }
+    }
+
+    $filter_info[] = array(
+      'field_name' => $filter,
+      'field_type' => $field['type'],
+      'field_value' => $filter_value,
+    );
+  }
+
+  // Process form submission.
+  $form['availability']['result']['#markup'] = '<p>' . _ac_show_availability(date("d-m-Y", strtotime($date)), date("d-m-Y", strtotime($enddate)), $filter_info);
+  return $form['availability'];
+}
+
+/**
+ * menu call back for autocomplete
+ */
+function _acsa_autocomplete($filter, $string) {
+  $matches = array();
+  $results = db_select('field_data_' . $filter, 'f')
+    ->fields('f', array($filter . '_value'))
+    ->condition($filter . '_value', '%' . db_like($string) . '%', 'LIKE')
+    ->range(0, 10)
+    ->execute();
+  foreach ($results as $result) {
+    $matches[$result -> {$filter . '_value'}] = check_plain($result -> {$filter . '_value'});
+  }
+  drupal_json_output($matches);
+}
+
+/**
+ * helper function to generate the table
+ */
+function _ac_show_availability($date, $enddate, $filter_info) {
+  //show availability on current day
+  $replacement = '<div id = "availability" class = "slider1">';
+
+  // find all the resource
+  $datediff = strtotime($enddate) - strtotime($date);
+
+  for ($i = 0; $i <= floor($datediff/(60*60*24)); $i++) {
+    $replacement .= '<div class="slide"><table><th>' . $date . '</th>';
+    $query = new EntityFieldQuery();
+    $query->entityCondition('entity_type', 'node')
+      ->entityCondition('bundle', 'resource')
+      ->propertyCondition('status', 1)
+      ->addMetaData('account', user_load(1)); // Run the query as user 1.
+    foreach($filter_info as $filter) {
+      if ($filter['field_value'] != '') {
+        if ($filter['field_type'] == 'taxonomy_term_reference') {
+          $query->fieldCondition($filter['field_name'], 'tid', $filter['field_value']);
+        }
+        else {
+          $query->fieldCondition($filter['field_name'], 'value', $filter['field_value']);
+        }
+      }
+    }
+    $result = $query->execute();
+    if (isset($result['node'])) {
+      $resource_items_nids = array_keys($result['node']);
+      $resource_items = entity_load('node', $resource_items_nids);
+      foreach($resource_items as $resource_item) {
+        if (isset($resource_item->field_availability[LANGUAGE_NONE])) {
+          $cid = $resource_item->field_availability[LANGUAGE_NONE][0]['cid'];
+          $sid = db_query('select sid from {availability_calendar_availability} where cid = :cid and date = :date', array(':cid' => $cid, ':date' => date("Y-m-d", strtotime($date))))->fetchField();
+        } else {
+          $sid = 2;
+        }
+        switch ($sid) {
+          case 1:
+            $class = 'cal-nc';
+            break;
+          case 2:
+            $class = 'cal-av';
+            break;
+          case 3:
+            $class = 'cal-na';
+            break;
+          case 4:
+            $class = 'cal-opt';
+            break;
+          case '':
+            $class = 'cal-av';
+            break;
+        }
+        $replacement .= '<tr><td class = "' . $class . '">' . l($resource_item->title, 'node/' . $resource_item->nid) . '</td></tr>';
+      }
+    }
+    $replacement .= '</table></div>';
+    $date = date("d-m-Y", strtotime("$date +1 day"));
+  }
+
+  return $replacement;
+}
